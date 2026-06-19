@@ -191,6 +191,9 @@ class RiskEngine {
     if (snapshot.activityContext == ActivityContext.still &&
         snapshot.speedKph < 1.5) {
       value += 0.03 + (profile.effectiveBoredomSensitivity * 0.04);
+      if (snapshot.vehicleContextScore > 0.4) {
+        value += 0.06 + (profile.effectiveDriveSensitivity * 0.04);
+      }
     }
     if (snapshot.charging) {
       value += 0.02;
@@ -286,6 +289,9 @@ class RiskEngine {
     }
     if (dominant == 'com.whatsapp' || dominant == 'com.whatsapp.w4b') {
       value += 0.03;
+    }
+    if (snapshot.activityContext == ActivityContext.still) {
+      value += 0.03 * profile.effectiveBoredomSensitivity;
     }
     return value.clamp(0.0, 0.24);
   }

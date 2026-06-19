@@ -39,85 +39,48 @@ class HomeScreen extends ConsumerWidget {
               child: Text('تعذر تحميل اللوحة.\n$error'),
             ),
         data: (NafasDashboardState state) {
-          final int percent = (state.riskAssessment.score * 100).round();
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
               FrostedCard(
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                  crossAxisAlignment: CrossAxisAlignment.center,
                   children: <Widget>[
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: <Widget>[
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: <Widget>[
-                              Text(
-                                _riskLabel(state.riskAssessment.level),
-                                style: Theme.of(context).textTheme.displaySmall,
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
-                                state.riskAssessment.summary,
-                                style: Theme.of(context).textTheme.bodyMedium
-                                    ?.copyWith(
-                                      color: AppPalette.textSecondary,
-                                      height: 1.45,
-                                    ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(width: 18),
-                        SizedBox(
-                          width: 112,
-                          height: 112,
-                          child: Stack(
-                            alignment: Alignment.center,
-                            children: <Widget>[
-                              SizedBox(
-                                width: 112,
-                                height: 112,
-                                child: CircularProgressIndicator(
-                                  value: percent / 100,
-                                  strokeWidth: 10,
-                                  backgroundColor: Colors.white.withValues(
-                                    alpha: 0.06,
-                                  ),
-                                  color: AppPalette.primary,
-                                ),
-                              ),
-                              Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: <Widget>[
-                                  Text(
-                                    '$percent%',
-                                    style: Theme.of(
-                                      context,
-                                    ).textTheme.headlineSmall,
-                                  ),
-                                  Text(
-                                    'الخطر',
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .labelMedium
-                                        ?.copyWith(
-                                          color: AppPalette.textMuted,
-                                        ),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
+                    const SizedBox(height: 12),
+                    _GlowingPulseRing(
+                      score: state.riskAssessment.score,
+                      level: state.riskAssessment.level,
                     ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 18),
+                    Text(
+                      _riskLabel(state.riskAssessment.level),
+                      style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                            color: switch (state.riskAssessment.level) {
+                              RiskLevel.low => AppPalette.emerald,
+                              RiskLevel.moderate => AppPalette.secondary,
+                              RiskLevel.high => AppPalette.amber,
+                              RiskLevel.critical => AppPalette.danger,
+                            },
+                          ),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 8),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      child: Text(
+                        state.riskAssessment.summary,
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                              color: AppPalette.textSecondary,
+                              height: 1.45,
+                            ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                    const SizedBox(height: 24),
                     Wrap(
                       spacing: 10,
                       runSpacing: 10,
+                      alignment: WrapAlignment.center,
                       children: <Widget>[
                         MetricChip(
                           label: 'منذ آخر سيجارة',
@@ -143,7 +106,7 @@ class HomeScreen extends ConsumerWidget {
                         ),
                       ],
                     ),
-                    const SizedBox(height: 14),
+                    const SizedBox(height: 22),
                     Row(
                       children: <Widget>[
                         Expanded(
@@ -159,7 +122,7 @@ class HomeScreen extends ConsumerWidget {
                             onPressed:
                                 () => ref
                                     .read(nafasEngineControllerProvider.notifier)
-                        .startRescueFlow(),
+                                    .startRescueFlow(),
                             icon: const Icon(Icons.flash_on_rounded),
                             label: const Text('الإنقاذ'),
                           ),
@@ -396,3 +359,143 @@ class _MissionCard extends StatelessWidget {
     );
   }
 }
+
+class _GlowingPulseRing extends StatefulWidget {
+  const _GlowingPulseRing({
+    required this.score,
+    required this.level,
+  });
+
+  final double score;
+  final RiskLevel level;
+
+  @override
+  State<_GlowingPulseRing> createState() => _GlowingPulseRingState();
+}
+
+class _GlowingPulseRingState extends State<_GlowingPulseRing> with SingleTickerProviderStateMixin {
+  late AnimationController _pulseController;
+
+  @override
+  void initState() {
+    super.initState();
+    final Duration duration = _durationFor(widget.level);
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: duration,
+    )..repeat(reverse: true);
+  }
+
+  @override
+  void didUpdateWidget(covariant _GlowingPulseRing oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.level != widget.level) {
+      _pulseController.duration = _durationFor(widget.level);
+      if (!_pulseController.isAnimating) {
+        _pulseController.repeat(reverse: true);
+      }
+    }
+  }
+
+  Duration _durationFor(RiskLevel level) {
+    return switch (level) {
+      RiskLevel.low => const Duration(seconds: 3),
+      RiskLevel.moderate => const Duration(seconds: 2),
+      RiskLevel.high => const Duration(milliseconds: 1200),
+      RiskLevel.critical => const Duration(milliseconds: 800),
+    };
+  }
+
+  @override
+  void dispose() {
+    _pulseController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final Color tintColor = switch (widget.level) {
+      RiskLevel.low => AppPalette.emerald,
+      RiskLevel.moderate => AppPalette.secondary,
+      RiskLevel.high => AppPalette.amber,
+      RiskLevel.critical => AppPalette.danger,
+    };
+
+    final int percent = (widget.score * 100).round();
+
+    return AnimatedBuilder(
+      animation: _pulseController,
+      builder: (BuildContext context, Widget? child) {
+        final double glowSize = 130.0 + (_pulseController.value * 28.0);
+        final double opacity = 0.06 + ((1.0 - _pulseController.value) * 0.14);
+
+        return SizedBox(
+          width: 190,
+          height: 190,
+          child: Stack(
+            alignment: Alignment.center,
+            children: <Widget>[
+              Container(
+                width: glowSize,
+                height: glowSize,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  boxShadow: <BoxShadow>[
+                    BoxShadow(
+                      color: tintColor.withValues(alpha: opacity),
+                      blurRadius: 32,
+                      spreadRadius: 10,
+                    ),
+                  ],
+                ),
+              ),
+              SizedBox(
+                width: 160,
+                height: 160,
+                child: CircularProgressIndicator(
+                  value: widget.score,
+                  strokeWidth: 8,
+                  backgroundColor: Colors.white.withValues(alpha: 0.04),
+                  color: tintColor,
+                  strokeCap: StrokeCap.round,
+                ),
+              ),
+              Container(
+                width: 140,
+                height: 140,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: AppPalette.surface.withValues(alpha: 0.88),
+                  border: Border.all(
+                    color: tintColor.withValues(alpha: 0.15),
+                    width: 1.5,
+                  ),
+                ),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: <Widget>[
+                    Text(
+                      '$percent%',
+                      style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                            color: AppPalette.textPrimary,
+                            fontWeight: FontWeight.bold,
+                          ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'مستوى الخطر',
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                            color: AppPalette.textMuted,
+                          ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:nafas_os/core/design/app_palette.dart';
 import 'package:nafas_os/core/widgets/frosted_card.dart';
@@ -1479,6 +1480,10 @@ class _RescueInteractiveMissionCardState
                   if (complete || _submitting) {
                     return;
                   }
+                  HapticFeedback.lightImpact();
+                  if (_progress + 1 >= widget.target) {
+                    HapticFeedback.heavyImpact();
+                  }
                   setState(() {
                     _progress += 1;
                   });
@@ -1496,8 +1501,19 @@ class _RescueInteractiveMissionCardState
                   if (complete || _submitting) {
                     return;
                   }
+                  final int nextPhase = (_breathPhase + 1) % 3;
+                  if (nextPhase == 1) {
+                    HapticFeedback.mediumImpact(); // Inhaling tension
+                  } else if (nextPhase == 2) {
+                    HapticFeedback.lightImpact(); // Exhaling
+                  } else {
+                    HapticFeedback.vibrate(); // Loop complete - deep relaxation
+                    if (_progress + 1 >= widget.target) {
+                      HapticFeedback.heavyImpact();
+                    }
+                  }
                   setState(() {
-                    _breathPhase = (_breathPhase + 1) % 3;
+                    _breathPhase = nextPhase;
                     if (_breathPhase == 0) {
                       _progress += 1;
                     }
@@ -1556,10 +1572,22 @@ class _RescueInteractiveMissionCardState
   }
 
   Widget _buildCore(BuildContext context, bool complete) {
+    double size = 132.0;
+    if (widget.interactionMode == MissionInteractionMode.breathCycle) {
+      size = switch (_breathPhase) {
+        0 => 120.0,
+        1 => 146.0,
+        _ => 132.0,
+      };
+    } else if (widget.interactionMode == MissionInteractionMode.holdShield && _holdTimer != null) {
+      size = 142.0;
+    }
+
     return AnimatedContainer(
-      duration: const Duration(milliseconds: 160),
-      width: 132,
-      height: 132,
+      duration: const Duration(milliseconds: 280),
+      curve: Curves.easeInOut,
+      width: size,
+      height: size,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
         gradient: RadialGradient(
@@ -1572,7 +1600,7 @@ class _RescueInteractiveMissionCardState
         ),
         border: Border.all(
           color: complete ? AppPalette.emerald : _accentColor,
-          width: 2,
+          width: 2.5,
         ),
       ),
       alignment: Alignment.center,
@@ -1581,14 +1609,19 @@ class _RescueInteractiveMissionCardState
         children: <Widget>[
           Text(
             '$_progress/${widget.target}',
-            style: Theme.of(context).textTheme.headlineSmall,
+            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
           ),
           const SizedBox(height: 4),
           Text(
             complete ? 'اكتملت' : _phaseLabel,
             style: Theme.of(
               context,
-            ).textTheme.labelMedium?.copyWith(color: AppPalette.textSecondary),
+            ).textTheme.labelMedium?.copyWith(
+                  color: AppPalette.textSecondary,
+                  fontWeight: FontWeight.w500,
+                ),
           ),
         ],
       ),
@@ -1626,19 +1659,27 @@ class _RescueInteractiveMissionCardState
     if (_submitting || _progress >= widget.target) {
       return;
     }
+    HapticFeedback.mediumImpact();
     _holdTimer?.cancel();
     _holdTimer = Timer.periodic(const Duration(milliseconds: 220), (_) {
       if (!mounted || _progress >= widget.target) {
         _stopHolding();
         return;
       }
+      HapticFeedback.selectionClick();
       setState(() {
         _progress += 1;
       });
+      if (_progress >= widget.target) {
+        HapticFeedback.heavyImpact();
+      }
     });
   }
 
   void _stopHolding() {
+    if (_holdTimer != null) {
+      HapticFeedback.lightImpact();
+    }
     _holdTimer?.cancel();
     _holdTimer = null;
   }
