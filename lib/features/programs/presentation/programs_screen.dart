@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:nafas_os/core/design/app_palette.dart';
@@ -87,9 +88,13 @@ class ProgramsScreen extends ConsumerWidget {
             ),
           ];
 
+          final int totalSuccesses = state.missionMemories.fold<int>(0, (int sum, MissionMemory m) => sum + m.successCount);
+
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
+              _BreathTreeWidget(successCount: totalSuccesses),
+              const SizedBox(height: 18),
               _RecommendedProgramHero(
                 title: _recommendedProgramTitle(
                   state.riskAssessment.recommendedIntervention,
@@ -566,3 +571,208 @@ class _MissionMemoryCard extends StatelessWidget {
     };
   }
 }
+
+class _BreathTreeWidget extends StatelessWidget {
+  const _BreathTreeWidget({required this.successCount});
+
+  final int successCount;
+
+  @override
+  Widget build(BuildContext context) {
+    final String treeStatus = successCount >= 20
+        ? 'مزدهرة بالكامل'
+        : successCount >= 8
+            ? 'نامية وتزهر'
+            : 'بذرة تحت الرعاية';
+
+    final Color statusColor = successCount >= 20
+        ? AppPalette.emerald
+        : successCount >= 8
+            ? AppPalette.primary
+            : AppPalette.textMuted;
+
+    return FrostedCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: <Widget>[
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    'شجرة النَّفَس (Breath Tree)',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'تنمو وتزهر مع كل رغبة تقاومها بنجاح.',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: AppPalette.textSecondary,
+                        ),
+                  ),
+                ],
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: statusColor.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  treeStatus,
+                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                        color: statusColor,
+                        fontWeight: FontWeight.bold,
+                      ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 18),
+          Center(
+            child: SizedBox(
+              width: double.infinity,
+              height: 140,
+              child: CustomPaint(
+                painter: _BreathTreePainter(successCount: successCount),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Divider(color: AppPalette.stroke, height: 1),
+          const SizedBox(height: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: <Widget>[
+              _StatIndicator(
+                label: 'مرات المقاومة',
+                value: '$successCount',
+                icon: Icons.shield_rounded,
+                color: AppPalette.primary,
+              ),
+              _StatIndicator(
+                label: 'عمر الرئة المكتسب',
+                value: '${successCount * 2} س',
+                icon: Icons.timer_rounded,
+                color: AppPalette.emerald,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StatIndicator extends StatelessWidget {
+  const _StatIndicator({
+    required this.label,
+    required this.value,
+    required this.icon,
+    required this.color,
+  });
+
+  final String label;
+  final String value;
+  final IconData icon;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: <Widget>[
+        Icon(icon, size: 18, color: color),
+        const SizedBox(width: 6),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Text(
+              label,
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: AppPalette.textMuted,
+                  ),
+            ),
+            Text(
+              value,
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _BreathTreePainter extends CustomPainter {
+  const _BreathTreePainter({required this.successCount});
+
+  final int successCount;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final Paint trunkPaint = Paint()
+      ..color = AppPalette.stroke
+      ..strokeWidth = 6.0
+      ..strokeCap = StrokeCap.round;
+
+    final Paint branchPaint = Paint()
+      ..color = AppPalette.textMuted.withValues(alpha: 0.7)
+      ..strokeWidth = 3.0
+      ..strokeCap = StrokeCap.round;
+
+    final Offset bottom = Offset(size.width / 2, size.height);
+    final Offset top = Offset(size.width / 2, size.height - 40);
+    canvas.drawLine(bottom, top, trunkPaint);
+
+    final int maxDepth = (successCount ~/ 4 + 2).clamp(2, 5);
+
+    void drawBranch(Offset start, double angle, double length, int depth) {
+      if (depth <= 0) {
+        final Paint leafPaint = Paint()
+          ..color = successCount > 12
+              ? AppPalette.emerald.withValues(alpha: 0.85)
+              : AppPalette.primary.withValues(alpha: 0.7)
+          ..style = PaintingStyle.fill;
+
+        canvas.drawCircle(
+          start,
+          4.0 + (successCount.clamp(0, 20) * 0.25),
+          Paint()
+            ..color = leafPaint.color.withValues(alpha: 0.25)
+            ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4),
+        );
+        canvas.drawCircle(start, 2.5 + (successCount.clamp(0, 20) * 0.15), leafPaint);
+        return;
+      }
+
+      final double radians = angle * math.pi / 180;
+      final Offset end = Offset(
+        start.dx + length * math.cos(radians),
+        start.dy - length * math.sin(radians),
+      );
+
+      branchPaint.strokeWidth = depth.toDouble().clamp(1.5, 4.0);
+      canvas.drawLine(start, end, branchPaint);
+
+      final double nextLength = length * 0.78;
+      drawBranch(end, angle - 24, nextLength, depth - 1);
+      drawBranch(end, angle + 24, nextLength, depth - 1);
+      
+      if (successCount >= 10 && depth >= 3) {
+        drawBranch(end, angle, nextLength * 0.9, depth - 1);
+      }
+    }
+
+    drawBranch(top, 90, 28, maxDepth);
+  }
+
+  @override
+  bool shouldRepaint(covariant _BreathTreePainter oldDelegate) {
+    return oldDelegate.successCount != successCount;
+  }
+}
+
