@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -8,6 +9,7 @@ import 'package:nafas_os/core/widgets/frosted_card.dart';
 import 'package:nafas_os/core/widgets/nafas_page_scaffold.dart';
 import 'package:nafas_os/core/widgets/section_heading.dart';
 import 'package:nafas_os/shared/models/app_enums.dart';
+import 'package:nafas_os/shared/models/guarded_audio_session.dart';
 import 'package:nafas_os/shared/state/nafas_engine_controller.dart';
 import 'package:permission_handler/permission_handler.dart';
 
@@ -41,20 +43,63 @@ class _RescueScreenState extends ConsumerState<RescueScreen> {
       nafasEngineControllerProvider,
     );
 
-    return NafasPageScaffold(
-      title: 'وضع الإنقاذ',
-      subtitle: 'حوّل الـ 45 ثانية القادمة من اندفاع تلقائي إلى تدخل موجّه.',
-      child: dashboard.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (Object error, StackTrace stackTrace) =>
-            FrostedCard(child: Text('تعذر تحميل وضع الإنقاذ.\n$error')),
-        data: (NafasDashboardState state) {
-          final InterventionType activeIntervention =
-              state.activeRescueIntervention ??
-              state.riskAssessment.recommendedIntervention;
-          final _RescueMission mission = _missionFor(activeIntervention);
+    return dashboard.when(
+      loading: () => const NafasPageScaffold(
+        title: 'وضع الإنقاذ',
+        subtitle: 'حوّل الـ 45 ثانية القادمة من اندفاع تلقائي إلى تدخل موجّه.',
+        child: Center(child: CircularProgressIndicator()),
+      ),
+      error: (Object error, StackTrace stackTrace) => NafasPageScaffold(
+        title: 'وضع الإنقاذ',
+        subtitle: 'حوّل الـ 45 ثانية القادمة من اندفاع تلقائي إلى تدخل موجّه.',
+        child: FrostedCard(child: Text('تعذر تحميل وضع الإنقاذ.\n$error')),
+      ),
+      data: (NafasDashboardState state) {
+        final InterventionType activeIntervention =
+            state.activeRescueIntervention ??
+            state.riskAssessment.recommendedIntervention;
+        final _RescueMission mission = _missionFor(activeIntervention);
 
-          return Column(
+        Decoration bgDecoration = const BoxDecoration(gradient: AppPalette.appGradient);
+        if (state.activeRescueIntervention != null) {
+          bgDecoration = const BoxDecoration(
+            gradient: RadialGradient(
+              center: Alignment.center,
+              radius: 1.5,
+              colors: <Color>[Color(0xFF0F3A30), Color(0xFF071411)],
+            ),
+          );
+        } else {
+          bgDecoration = switch (state.riskAssessment.level) {
+            RiskLevel.critical || RiskLevel.high => const BoxDecoration(
+              gradient: RadialGradient(
+                center: Alignment.center,
+                radius: 1.5,
+                colors: <Color>[Color(0xFF1C0A0D), Color(0xFF090304)],
+              ),
+            ),
+            RiskLevel.moderate => const BoxDecoration(
+              gradient: RadialGradient(
+                center: Alignment.center,
+                radius: 1.5,
+                colors: <Color>[Color(0xFF130A1C), Color(0xFF060309)],
+              ),
+            ),
+            _ => const BoxDecoration(
+              gradient: RadialGradient(
+                center: Alignment.center,
+                radius: 1.5,
+                colors: <Color>[Color(0xFF070B14), Color(0xFF03050A)],
+              ),
+            ),
+          };
+        }
+
+        return NafasPageScaffold(
+          title: 'وضع الإنقاذ',
+          subtitle: 'حوّل الـ 45 ثانية القادمة من اندفاع تلقائي إلى تدخل موجّه.',
+          decoration: bgDecoration,
+          child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
               _buildHeroCard(context, state, activeIntervention),
@@ -129,11 +174,12 @@ class _RescueScreenState extends ConsumerState<RescueScreen> {
                 interactionMode: state.missions.isEmpty
                     ? MissionInteractionMode.tapSequence
                     : state.missions.first.interactionMode,
+                audioSession: state.guardedAudioSession,
                 onCompleted: () async {
                   if (state.activeRescueIntervention == null) {
                     await ref
                         .read(nafasEngineControllerProvider.notifier)
-                .startRescueFlow(interventionType: activeIntervention);
+                        .startRescueFlow(interventionType: activeIntervention);
                   }
                   await ref
                       .read(nafasEngineControllerProvider.notifier)
@@ -254,9 +300,9 @@ class _RescueScreenState extends ConsumerState<RescueScreen> {
                 },
               ),
             ],
-          );
-        },
-      ),
+          ),
+        );
+      },
     );
   }
 
@@ -1420,6 +1466,7 @@ class _RescueInteractiveMissionCard extends StatefulWidget {
     required this.subtitle,
     required this.target,
     required this.interactionMode,
+    required this.audioSession,
     required this.onCompleted,
   });
 
@@ -1427,6 +1474,7 @@ class _RescueInteractiveMissionCard extends StatefulWidget {
   final String subtitle;
   final int target;
   final MissionInteractionMode interactionMode;
+  final GuardedAudioSession audioSession;
   final Future<void> Function() onCompleted;
 
   @override
@@ -1435,16 +1483,124 @@ class _RescueInteractiveMissionCard extends StatefulWidget {
 }
 
 class _RescueInteractiveMissionCardState
-    extends State<_RescueInteractiveMissionCard> {
+    extends State<_RescueInteractiveMissionCard>
+    with SingleTickerProviderStateMixin {
   int _progress = 0;
-  int _breathPhase = 0;
+  int _breathPhase = 0; // 0 = inhale, 1 = hold, 2 = exhale
   bool _submitting = false;
   Timer? _holdTimer;
+
+  // Animation controller for physics ticker
+  late AnimationController _tickerController;
+
+  // --- Hold Shield fields ---
+  Offset? _touchOffset;
+  bool _isHolding = false;
+  double _deformAmount = 0.0;
+  double _deformVelocity = 0.0;
+  final List<_SparkParticle> _particles = [];
+
+  // --- Ghost Cigarette fields ---
+  double _ripplePhase = 0.0;
+
+  // --- Tap Sequence / CBT fields ---
+  int _cbtStep = 0; // 0 = drag, 1 = pop emotions, 2 = victory
+  Offset _triggerOffset = Offset.zero;
+  bool _isDraggingTrigger = false;
+  final List<_CbtWord> _cbtWords = [];
+  final List<_CbtParticle> _cbtParticles = [];
+  final math.Random _random = math.Random();
+
+  @override
+  void initState() {
+    super.initState();
+    _tickerController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 1),
+    )..addListener(_onTick);
+    _tickerController.repeat();
+
+    _setupCbtWords();
+  }
+
+  void _setupCbtWords() {
+    _cbtWords.clear();
+    final List<String> words = ['قلق', 'ضغط', 'عادة تلقائية', 'ملل', 'تعب'];
+    for (int i = 0; i < words.length; i++) {
+      _cbtWords.add(_CbtWord(
+        text: words[i],
+        offset: Offset(
+          20 + _random.nextDouble() * 180,
+          20 + _random.nextDouble() * 100,
+        ),
+        color: AppPalette.primary.withValues(alpha: 0.8),
+      ));
+    }
+  }
 
   @override
   void dispose() {
     _holdTimer?.cancel();
+    _tickerController.dispose();
     super.dispose();
+  }
+
+  void _onTick() {
+    if (!mounted) return;
+    setState(() {
+      // Update physics for Gel Bubble
+      final double targetDeform = _isHolding ? 1.0 : 0.0;
+      const double springK = 0.12;
+      const double damping = 0.82;
+      _deformVelocity += (targetDeform - _deformAmount) * springK;
+      _deformVelocity *= damping;
+      _deformAmount += _deformVelocity;
+
+      // Update ripple phase
+      _ripplePhase += 0.05;
+
+      // Update particles
+      for (int i = _particles.length - 1; i >= 0; i--) {
+        final p = _particles[i];
+        p.position += p.velocity;
+        p.life -= 0.02;
+        p.opacity = p.life.clamp(0.0, 1.0);
+        if (p.life <= 0) {
+          _particles.removeAt(i);
+        }
+      }
+
+      // Update CBT particles
+      for (int i = _cbtParticles.length - 1; i >= 0; i--) {
+        final p = _cbtParticles[i];
+        p.position += p.velocity;
+        p.life -= 0.03;
+        p.opacity = p.life.clamp(0.0, 1.0);
+        if (p.life <= 0) {
+          _cbtParticles.removeAt(i);
+        }
+      }
+
+      // Add particles if holding
+      if (_isHolding && _random.nextDouble() < 0.3) {
+        const double boxSize = 180.0;
+        const double center = boxSize / 2.0;
+        final Offset spawnCenter = _touchOffset ?? const Offset(center, center);
+        _particles.add(_SparkParticle(
+          position: Offset(
+            spawnCenter.dx + (_random.nextDouble() - 0.5) * 40,
+            spawnCenter.dy + (_random.nextDouble() - 0.5) * 40,
+          ),
+          velocity: Offset(
+            (_random.nextDouble() - 0.5) * 1.5,
+            -1.0 - _random.nextDouble() * 1.5,
+          ),
+          opacity: 1.0,
+          size: 2.0 + _random.nextDouble() * 3.0,
+          life: 1.0,
+        ));
+      }
+    });
   }
 
   @override
@@ -1475,57 +1631,16 @@ class _RescueInteractiveMissionCardState
           const SizedBox(height: 16),
           Center(
             child: switch (widget.interactionMode) {
-              MissionInteractionMode.tapSequence => GestureDetector(
-                onTap: () {
-                  if (complete || _submitting) {
-                    return;
-                  }
-                  HapticFeedback.lightImpact();
-                  if (_progress + 1 >= widget.target) {
-                    HapticFeedback.heavyImpact();
-                  }
-                  setState(() {
-                    _progress += 1;
-                  });
-                },
-                child: _buildCore(context, complete),
-              ),
-              MissionInteractionMode.holdShield => GestureDetector(
-                onLongPressStart: (_) => _startHolding(),
-                onLongPressEnd: (_) => _stopHolding(),
-                onLongPressCancel: _stopHolding,
-                child: _buildCore(context, complete),
-              ),
-              MissionInteractionMode.breathCycle => GestureDetector(
-                onTap: () {
-                  if (complete || _submitting) {
-                    return;
-                  }
-                  final int nextPhase = (_breathPhase + 1) % 3;
-                  if (nextPhase == 1) {
-                    HapticFeedback.mediumImpact(); // Inhaling tension
-                  } else if (nextPhase == 2) {
-                    HapticFeedback.lightImpact(); // Exhaling
-                  } else {
-                    HapticFeedback.vibrate(); // Loop complete - deep relaxation
-                    if (_progress + 1 >= widget.target) {
-                      HapticFeedback.heavyImpact();
-                    }
-                  }
-                  setState(() {
-                    _breathPhase = nextPhase;
-                    if (_breathPhase == 0) {
-                      _progress += 1;
-                    }
-                  });
-                },
-                child: _buildCore(context, complete),
-              ),
+              MissionInteractionMode.tapSequence => _buildCbtGame(context, complete),
+              MissionInteractionMode.holdShield => _buildHoldShield(context, complete),
+              MissionInteractionMode.breathCycle => _buildBreathCycle(context, complete),
             },
           ),
           const SizedBox(height: 16),
           LinearProgressIndicator(
-            value: (_progress / widget.target).clamp(0.0, 1.0),
+            value: (widget.interactionMode == MissionInteractionMode.tapSequence && _cbtStep == 2)
+                ? 1.0
+                : (_progress / widget.target).clamp(0.0, 1.0),
             minHeight: 10,
             borderRadius: BorderRadius.circular(999),
             backgroundColor: Colors.white.withValues(alpha: 0.06),
@@ -1556,6 +1671,8 @@ class _RescueInteractiveMissionCardState
                       _submitting = false;
                       _progress = 0;
                       _breathPhase = 0;
+                      _cbtStep = 0;
+                      _setupCbtWords();
                     });
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(
@@ -1571,61 +1688,402 @@ class _RescueInteractiveMissionCardState
     );
   }
 
-  Widget _buildCore(BuildContext context, bool complete) {
-    double size = 132.0;
-    if (widget.interactionMode == MissionInteractionMode.breathCycle) {
-      size = switch (_breathPhase) {
-        0 => 120.0,
-        1 => 146.0,
-        _ => 132.0,
-      };
-    } else if (widget.interactionMode == MissionInteractionMode.holdShield && _holdTimer != null) {
-      size = 142.0;
-    }
-
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 280),
-      curve: Curves.easeInOut,
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        gradient: RadialGradient(
-          colors: <Color>[
-            complete
-                ? AppPalette.emerald.withValues(alpha: 0.34)
-                : _accentColor.withValues(alpha: 0.28),
-            AppPalette.surface,
-          ],
-        ),
-        border: Border.all(
+  Widget _buildHoldShield(BuildContext context, bool complete) {
+    return Listener(
+      onPointerDown: (event) {
+        final RenderBox? renderBox = context.findRenderObject() as RenderBox?;
+        if (renderBox != null) {
+          final Offset localOffset = renderBox.globalToLocal(event.position);
+          setState(() {
+            _touchOffset = localOffset;
+            _isHolding = true;
+          });
+          _startHolding();
+        }
+      },
+      onPointerMove: (event) {
+        final RenderBox? renderBox = context.findRenderObject() as RenderBox?;
+        if (renderBox != null) {
+          final Offset localOffset = renderBox.globalToLocal(event.position);
+          setState(() {
+            _touchOffset = localOffset;
+          });
+        }
+      },
+      onPointerUp: (event) {
+        setState(() {
+          _isHolding = false;
+          _touchOffset = null;
+        });
+        _stopHolding();
+      },
+      onPointerCancel: (event) {
+        setState(() {
+          _isHolding = false;
+          _touchOffset = null;
+        });
+        _stopHolding();
+      },
+      child: CustomPaint(
+        size: const Size(180, 180),
+        painter: _GelBubblePainter(
+          deformAmount: _deformAmount,
+          touchOffset: _touchOffset,
+          isPressed: _isHolding,
+          ripplePhase: _ripplePhase,
+          particles: _particles,
           color: complete ? AppPalette.emerald : _accentColor,
-          width: 2.5,
+          progress: _progress,
+          target: widget.target,
         ),
-      ),
-      alignment: Alignment.center,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          Text(
-            '$_progress/${widget.target}',
-            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
+        child: Container(
+          width: 180,
+          height: 180,
+          alignment: Alignment.center,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Text(
+                '$_progress/${widget.target}',
+                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                complete ? 'اكتملت' : _phaseLabel,
+                style: Theme.of(
+                  context,
+                ).textTheme.labelMedium?.copyWith(
+                      color: AppPalette.textSecondary,
+                      fontWeight: FontWeight.w500,
+                    ),
+              ),
+            ],
           ),
-          const SizedBox(height: 4),
-          Text(
-            complete ? 'اكتملت' : _phaseLabel,
-            style: Theme.of(
-              context,
-            ).textTheme.labelMedium?.copyWith(
-                  color: AppPalette.textSecondary,
-                  fontWeight: FontWeight.w500,
-                ),
-          ),
-        ],
+        ),
       ),
     );
+  }
+
+  Widget _buildBreathCycle(BuildContext context, bool complete) {
+    final double size = switch (_breathPhase) {
+      0 => 120.0,
+      1 => 146.0,
+      _ => 132.0,
+    };
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        GestureDetector(
+          onTap: () {
+            if (complete || _submitting) {
+              return;
+            }
+            final int nextPhase = (_breathPhase + 1) % 3;
+            if (nextPhase == 1) {
+              HapticFeedback.mediumImpact(); // Inhaling tension
+            } else if (nextPhase == 2) {
+              HapticFeedback.lightImpact(); // Exhaling
+            } else {
+              HapticFeedback.vibrate(); // Loop complete - deep relaxation
+              if (_progress + 1 >= widget.target) {
+                HapticFeedback.heavyImpact();
+              }
+            }
+            setState(() {
+              _breathPhase = nextPhase;
+              if (_breathPhase == 0) {
+                _progress += 1;
+              }
+            });
+          },
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 280),
+            curve: Curves.easeInOut,
+            width: size,
+            height: size,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: RadialGradient(
+                colors: <Color>[
+                  complete
+                      ? AppPalette.emerald.withValues(alpha: 0.34)
+                      : _accentColor.withValues(alpha: 0.28),
+                  AppPalette.surface,
+                ],
+              ),
+              border: Border.all(
+                color: complete ? AppPalette.emerald : _accentColor,
+                width: 2.5,
+              ),
+            ),
+            alignment: Alignment.center,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Text(
+                  '$_progress/${widget.target}',
+                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  complete ? 'اكتملت' : _phaseLabel,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.labelMedium?.copyWith(
+                        color: AppPalette.textSecondary,
+                        fontWeight: FontWeight.w500,
+                      ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        CustomPaint(
+          size: const Size(200, 36),
+          painter: _MicWavePainter(
+            amplitude: widget.audioSession.averageAmplitude.toDouble(),
+            phase: _ripplePhase,
+            color: complete ? AppPalette.emerald : _accentColor,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCbtGame(BuildContext context, bool complete) {
+    if (_cbtStep == 0) {
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          final double width = constraints.maxWidth;
+          final double centerX = width / 2;
+          final Offset portalCenter = Offset(centerX, 150);
+
+          if (!_isDraggingTrigger && _triggerOffset == Offset.zero) {
+            _triggerOffset = Offset(centerX - 50, 15);
+          }
+
+          return Container(
+            height: 220,
+            width: double.infinity,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.02),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: AppPalette.stroke),
+            ),
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Positioned(
+                  left: portalCenter.dx - 40,
+                  top: portalCenter.dy - 40,
+                  child: Container(
+                    width: 80,
+                    height: 80,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: AppPalette.primary.withValues(alpha: 0.6),
+                        width: 2,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: AppPalette.primary.withValues(alpha: 0.12),
+                          blurRadius: 8,
+                          spreadRadius: 1,
+                        ),
+                      ],
+                    ),
+                    alignment: Alignment.center,
+                    child: Text(
+                      'بوابة التبديد',
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                            color: AppPalette.textSecondary,
+                            fontSize: 11,
+                          ),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  left: _triggerOffset.dx,
+                  top: _triggerOffset.dy,
+                  child: GestureDetector(
+                    onPanStart: (_) {
+                      setState(() {
+                        _isDraggingTrigger = true;
+                      });
+                    },
+                    onPanUpdate: (details) {
+                      setState(() {
+                        _triggerOffset += details.delta;
+                      });
+                      final Offset currentTriggerCenter = Offset(_triggerOffset.dx + 50, _triggerOffset.dy + 25);
+                      final double distance = (currentTriggerCenter - portalCenter).distance;
+                      if (distance < 45) {
+                        HapticFeedback.mediumImpact();
+                        setState(() {
+                          _cbtStep = 1;
+                          _progress = 1;
+                          _isDraggingTrigger = false;
+                        });
+                      }
+                    },
+                    onPanEnd: (_) {
+                      setState(() {
+                        _isDraggingTrigger = false;
+                        _triggerOffset = Offset(centerX - 50, 15);
+                      });
+                    },
+                    child: Container(
+                      width: 100,
+                      height: 50,
+                      decoration: BoxDecoration(
+                        color: AppPalette.primary.withValues(alpha: 0.24),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: AppPalette.primary, width: 1.5),
+                        boxShadow: [
+                          BoxShadow(
+                            color: AppPalette.primary.withValues(alpha: 0.1),
+                            blurRadius: 6,
+                          ),
+                        ],
+                      ),
+                      alignment: Alignment.center,
+                      child: Text(
+                        'التوتر',
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                              fontWeight: FontWeight.bold,
+                            ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      );
+    } else if (_cbtStep == 1) {
+      return CustomPaint(
+        painter: _CbtParticlePainter(particles: _cbtParticles),
+        child: Container(
+          height: 220,
+          width: double.infinity,
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.02),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: AppPalette.stroke),
+          ),
+          child: Stack(
+            children: [
+              ..._cbtWords.map((word) => Positioned(
+                    left: word.offset.dx,
+                    top: word.offset.dy,
+                    child: GestureDetector(
+                      onTap: () => _popWord(word),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: AppPalette.primary.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                              color: AppPalette.primary.withValues(alpha: 0.4)),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.1),
+                              blurRadius: 4,
+                            ),
+                          ],
+                        ),
+                        child: Text(
+                          word.text,
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                color: AppPalette.textSecondary,
+                              ),
+                        ),
+                      ),
+                    ),
+                  )),
+            ],
+          ),
+        ),
+      );
+    } else {
+      return Container(
+        height: 220,
+        width: double.infinity,
+        decoration: BoxDecoration(
+          color: AppPalette.emerald.withValues(alpha: 0.04),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: AppPalette.emerald.withValues(alpha: 0.3)),
+        ),
+        alignment: Alignment.center,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 64,
+              height: 64,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: AppPalette.emerald.withValues(alpha: 0.2),
+              ),
+              child: const Icon(
+                Icons.check_circle_rounded,
+                color: AppPalette.emerald,
+                size: 40,
+              ),
+            ),
+            const SizedBox(height: 14),
+            Text(
+              'تم تفكيك المحفز بنجاح!',
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    color: AppPalette.emerald,
+                    fontWeight: FontWeight.bold,
+                  ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'اضغط على الزر أدناه لاعتماد النجاة.',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: AppPalette.textSecondary,
+                  ),
+            ),
+          ],
+        ),
+      );
+    }
+  }
+
+  void _popWord(_CbtWord word) {
+    HapticFeedback.lightImpact();
+    for (int i = 0; i < 8; i++) {
+      _cbtParticles.add(_CbtParticle(
+        position: word.offset + const Offset(40, 20),
+        velocity: Offset(
+          (_random.nextDouble() - 0.5) * 4,
+          (_random.nextDouble() - 0.5) * 4,
+        ),
+        opacity: 1.0,
+        size: 2.0 + _random.nextDouble() * 3.0,
+        life: 1.0,
+        color: AppPalette.primary,
+      ));
+    }
+    setState(() {
+      _cbtWords.remove(word);
+      if (_cbtWords.isEmpty) {
+        HapticFeedback.mediumImpact();
+        _cbtStep = 2;
+        _progress = widget.target;
+      }
+    });
   }
 
   Color get _accentColor => switch (widget.interactionMode) {
@@ -1683,6 +2141,205 @@ class _RescueInteractiveMissionCardState
     _holdTimer?.cancel();
     _holdTimer = null;
   }
+}
+
+class _SparkParticle {
+  _SparkParticle({
+    required this.position,
+    required this.velocity,
+    required this.opacity,
+    required this.size,
+    required this.life,
+  });
+
+  Offset position;
+  Offset velocity;
+  double opacity;
+  double size;
+  double life;
+}
+
+class _CbtWord {
+  _CbtWord({required this.text, required this.offset, required this.color});
+
+  final String text;
+  Offset offset;
+  final Color color;
+  bool popped = false;
+}
+
+class _CbtParticle {
+  _CbtParticle({
+    required this.position,
+    required this.velocity,
+    required this.opacity,
+    required this.size,
+    required this.life,
+    required this.color,
+  });
+
+  Offset position;
+  Offset velocity;
+  double opacity;
+  double size;
+  double life;
+  Color color;
+}
+
+class _GelBubblePainter extends CustomPainter {
+  _GelBubblePainter({
+    required this.deformAmount,
+    required this.touchOffset,
+    required this.isPressed,
+    required this.ripplePhase,
+    required this.particles,
+    required this.color,
+    required this.progress,
+    required this.target,
+  });
+
+  final double deformAmount;
+  final Offset? touchOffset;
+  final bool isPressed;
+  final double ripplePhase;
+  final List<_SparkParticle> particles;
+  final Color color;
+  final int progress;
+  final int target;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final Offset center = Offset(size.width / 2, size.height / 2);
+    final double baseRadius = math.min(size.width, size.height) / 2.3;
+
+    for (final p in particles) {
+      final pPaint = Paint()
+        ..color = color.withValues(alpha: p.opacity * 0.7)
+        ..style = PaintingStyle.fill;
+      canvas.drawCircle(p.position, p.size, pPaint);
+    }
+
+    final Path path = Path();
+    const int pointsCount = 72;
+    for (int i = 0; i <= pointsCount; i++) {
+      final double theta = (i * 360 / pointsCount) * math.pi / 180;
+      double r = baseRadius;
+
+      if (isPressed && touchOffset != null) {
+        final double touchAngle = math.atan2(
+          touchOffset!.dy - center.dy,
+          touchOffset!.dx - center.dx,
+        );
+        double diff = (theta - touchAngle).abs();
+        if (diff > math.pi) {
+          diff = 2 * math.pi - diff;
+        }
+        if (diff < math.pi / 2) {
+          final double factor = math.cos(diff * 2);
+          r += deformAmount * 16.0 * factor;
+        }
+      }
+
+      r += math.sin(theta * 6 + ripplePhase) * 2.5;
+
+      final double x = center.dx + r * math.cos(theta);
+      final double y = center.dy + r * math.sin(theta);
+      if (i == 0) {
+        path.moveTo(x, y);
+      } else {
+        path.lineTo(x, y);
+      }
+    }
+    path.close();
+
+    final Rect bounds = Rect.fromCircle(center: center, radius: baseRadius + 20);
+    final Paint fillPaint = Paint()
+      ..shader = RadialGradient(
+        center: touchOffset != null
+            ? Alignment(
+                ((touchOffset!.dx - center.dx) / baseRadius).clamp(-0.8, 0.8),
+                ((touchOffset!.dy - center.dy) / baseRadius).clamp(-0.8, 0.8),
+              )
+            : Alignment.center,
+        colors: [
+          color.withValues(alpha: 0.38),
+          color.withValues(alpha: 0.06),
+        ],
+      ).createShader(bounds)
+      ..style = PaintingStyle.fill;
+
+    final Paint strokePaint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.5;
+
+    canvas.drawPath(path, fillPaint);
+    canvas.drawPath(path, strokePaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _GelBubblePainter oldDelegate) => true;
+}
+
+class _MicWavePainter extends CustomPainter {
+  _MicWavePainter({
+    required this.amplitude,
+    required this.phase,
+    required this.color,
+  });
+
+  final double amplitude;
+  final double phase;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final Paint paint = Paint()
+      ..color = color.withValues(alpha: 0.6)
+      ..style = PaintingStyle.fill
+      ..strokeWidth = 3
+      ..strokeCap = StrokeCap.round;
+
+    final double center = size.width / 2;
+    const int barCount = 15;
+    const double barWidth = 4.0;
+    const double barGap = 4.0;
+
+    for (int i = 0; i < barCount; i++) {
+      final double x = center + (i - barCount / 2) * (barWidth + barGap);
+      final double distFromCenter = (i - barCount / 2).abs() / (barCount / 2);
+      final double factor = (1.0 - distFromCenter) * (0.3 + 0.7 * math.sin(phase + i * 0.5).abs());
+      final double height = (15 + amplitude * 60) * factor;
+
+      canvas.drawLine(
+        Offset(x, size.height / 2 - height / 2),
+        Offset(x, size.height / 2 + height / 2),
+        paint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _MicWavePainter oldDelegate) => true;
+}
+
+class _CbtParticlePainter extends CustomPainter {
+  _CbtParticlePainter({required this.particles});
+
+  final List<_CbtParticle> particles;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    for (final p in particles) {
+      final paint = Paint()
+        ..color = p.color.withValues(alpha: p.opacity)
+        ..style = PaintingStyle.fill;
+      canvas.drawCircle(p.position, p.size, paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _CbtParticlePainter oldDelegate) => true;
 }
 
 class _RescueMission {

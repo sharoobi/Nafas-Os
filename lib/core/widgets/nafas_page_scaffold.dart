@@ -8,17 +8,19 @@ class NafasPageScaffold extends StatelessWidget {
     required this.subtitle,
     required this.child,
     this.action,
+    this.decoration,
   });
 
   final String title;
   final String subtitle;
   final Widget child;
   final Widget? action;
+  final Decoration? decoration;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      decoration: const BoxDecoration(gradient: AppPalette.appGradient),
+      decoration: decoration ?? const BoxDecoration(gradient: AppPalette.appGradient),
       child: SafeArea(
         bottom: false,
         child: CustomScrollView(
