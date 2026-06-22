@@ -572,22 +572,78 @@ class _MissionMemoryCard extends StatelessWidget {
   }
 }
 
-class _BreathTreeWidget extends StatelessWidget {
+class _BreathTreeWidget extends StatefulWidget {
   const _BreathTreeWidget({required this.successCount});
 
   final int successCount;
 
   @override
+  State<_BreathTreeWidget> createState() => _BreathTreeWidgetState();
+}
+
+class _BreathTreeWidgetState extends State<_BreathTreeWidget>
+    with TickerProviderStateMixin {
+  late AnimationController _growthController;
+  late AnimationController _loopController;
+  final List<_TreeParticle> _particles = [];
+  final math.Random _random = math.Random();
+
+  @override
+  void initState() {
+    super.initState();
+    _growthController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1400),
+    );
+    _loopController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 8),
+    );
+
+    _growthController.forward();
+    _loopController.repeat();
+
+    // Initialize 16 floating particles
+    for (int i = 0; i < 16; i++) {
+      _particles.add(_TreeParticle(
+        x: _random.nextDouble(),
+        y: _random.nextDouble(),
+        speedY: 0.002 + _random.nextDouble() * 0.003,
+        speedX: (_random.nextDouble() - 0.5) * 0.002,
+        size: 1.5 + _random.nextDouble() * 2.5,
+        phase: _random.nextDouble() * math.pi * 2,
+        opacity: 0.2 + _random.nextDouble() * 0.6,
+      ));
+    }
+  }
+
+  @override
+  void dispose() {
+    _growthController.dispose();
+    _loopController.dispose();
+    super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(covariant _BreathTreeWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.successCount != widget.successCount) {
+      _growthController.reset();
+      _growthController.forward();
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final String treeStatus = successCount >= 20
+    final String treeStatus = widget.successCount >= 20
         ? 'مزدهرة بالكامل'
-        : successCount >= 8
+        : widget.successCount >= 8
             ? 'نامية وتزهر'
             : 'بذرة تحت الرعاية';
 
-    final Color statusColor = successCount >= 20
+    final Color statusColor = widget.successCount >= 20
         ? AppPalette.emerald
-        : successCount >= 8
+        : widget.successCount >= 8
             ? AppPalette.primary
             : AppPalette.textMuted;
 
@@ -635,8 +691,33 @@ class _BreathTreeWidget extends StatelessWidget {
             child: SizedBox(
               width: double.infinity,
               height: 140,
-              child: CustomPaint(
-                painter: _BreathTreePainter(successCount: successCount),
+              child: AnimatedBuilder(
+                animation: Listenable.merge([_growthController, _loopController]),
+                builder: (context, child) {
+                  // Update particles position in response to ticker
+                  final double time = _loopController.value * math.pi * 2;
+                  for (final p in _particles) {
+                    p.y -= p.speedY;
+                    p.x += p.speedX + math.sin(time + p.phase) * 0.001;
+
+                    // Wrap around screen boundaries
+                    if (p.y < 0) {
+                      p.y = 1.0;
+                      p.x = _random.nextDouble();
+                    }
+                    if (p.x < 0) p.x = 1.0;
+                    if (p.x > 1) p.x = 0.0;
+                  }
+
+                  return CustomPaint(
+                    painter: _BreathTreePainter(
+                      successCount: widget.successCount,
+                      growth: _growthController.value,
+                      swayValue: time,
+                      particles: _particles,
+                    ),
+                  );
+                },
               ),
             ),
           ),
@@ -648,13 +729,13 @@ class _BreathTreeWidget extends StatelessWidget {
             children: <Widget>[
               _StatIndicator(
                 label: 'مرات المقاومة',
-                value: '$successCount',
+                value: '${widget.successCount}',
                 icon: Icons.shield_rounded,
                 color: AppPalette.primary,
               ),
               _StatIndicator(
                 label: 'عمر الرئة المكتسب',
-                value: '${successCount * 2} س',
+                value: '${widget.successCount * 2} س',
                 icon: Icons.timer_rounded,
                 color: AppPalette.emerald,
               ),
@@ -707,16 +788,61 @@ class _StatIndicator extends StatelessWidget {
   }
 }
 
+class _TreeParticle {
+  _TreeParticle({
+    required this.x,
+    required this.y,
+    required this.speedY,
+    required this.speedX,
+    required this.size,
+    required this.phase,
+    required this.opacity,
+  });
+
+  double x; // 0.0 to 1.0
+  double y; // 0.0 to 1.0
+  double speedY;
+  double speedX;
+  double size;
+  double phase;
+  double opacity;
+}
+
 class _BreathTreePainter extends CustomPainter {
-  const _BreathTreePainter({required this.successCount});
+  const _BreathTreePainter({
+    required this.successCount,
+    required this.growth,
+    required this.swayValue,
+    required this.particles,
+  });
 
   final int successCount;
+  final double growth;
+  final double swayValue;
+  final List<_TreeParticle> particles;
 
   @override
   void paint(Canvas canvas, Size size) {
+    // 1. Draw Spores / Particles first so they float in the background/foreground
+    for (final p in particles) {
+      final Paint pPaint = Paint()
+        ..color = (successCount >= 20
+                ? AppPalette.emerald
+                : successCount >= 8
+                    ? AppPalette.primary
+                    : AppPalette.textMuted)
+            .withValues(alpha: p.opacity * math.sin(swayValue + p.phase).abs().clamp(0.1, 1.0))
+        ..style = PaintingStyle.fill;
+      canvas.drawCircle(
+        Offset(p.x * size.width, p.y * size.height),
+        p.size,
+        pPaint,
+      );
+    }
+
     final Paint trunkPaint = Paint()
       ..color = AppPalette.stroke
-      ..strokeWidth = 6.0
+      ..strokeWidth = 6.0 * growth
       ..strokeCap = StrokeCap.round;
 
     final Paint branchPaint = Paint()
@@ -725,7 +851,9 @@ class _BreathTreePainter extends CustomPainter {
       ..strokeCap = StrokeCap.round;
 
     final Offset bottom = Offset(size.width / 2, size.height);
-    final Offset top = Offset(size.width / 2, size.height - 40);
+    // Trunk height also grows
+    final double trunkHeight = 40.0 * growth;
+    final Offset top = Offset(size.width / 2, size.height - trunkHeight);
     canvas.drawLine(bottom, top, trunkPaint);
 
     final int maxDepth = (successCount ~/ 4 + 2).clamp(2, 5);
@@ -740,28 +868,33 @@ class _BreathTreePainter extends CustomPainter {
 
         canvas.drawCircle(
           start,
-          4.0 + (successCount.clamp(0, 20) * 0.25),
+          (4.0 + (successCount.clamp(0, 20) * 0.25)) * growth,
           Paint()
             ..color = leafPaint.color.withValues(alpha: 0.25)
             ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4),
         );
-        canvas.drawCircle(start, 2.5 + (successCount.clamp(0, 20) * 0.15), leafPaint);
+        canvas.drawCircle(start, (2.5 + (successCount.clamp(0, 20) * 0.15)) * growth, leafPaint);
         return;
       }
 
-      final double radians = angle * math.pi / 180;
+      // Wind sway angle offset gets larger for higher branches (depth decreases)
+      final double swayAngle = math.sin(swayValue + depth * 0.8) * 3.0 * (5 - depth);
+
+      final double radians = (angle + swayAngle) * math.pi / 180;
+      // Branch length also scales with growth
+      final double currentLength = length * growth;
       final Offset end = Offset(
-        start.dx + length * math.cos(radians),
-        start.dy - length * math.sin(radians),
+        start.dx + currentLength * math.cos(radians),
+        start.dy - currentLength * math.sin(radians),
       );
 
-      branchPaint.strokeWidth = depth.toDouble().clamp(1.5, 4.0);
+      branchPaint.strokeWidth = depth.toDouble().clamp(1.5, 4.0) * growth;
       canvas.drawLine(start, end, branchPaint);
 
       final double nextLength = length * 0.78;
       drawBranch(end, angle - 24, nextLength, depth - 1);
       drawBranch(end, angle + 24, nextLength, depth - 1);
-      
+
       if (successCount >= 10 && depth >= 3) {
         drawBranch(end, angle, nextLength * 0.9, depth - 1);
       }
@@ -771,8 +904,6 @@ class _BreathTreePainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _BreathTreePainter oldDelegate) {
-    return oldDelegate.successCount != successCount;
-  }
+  bool shouldRepaint(covariant _BreathTreePainter oldDelegate) => true;
 }
 

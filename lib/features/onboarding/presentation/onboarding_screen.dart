@@ -11,9 +11,20 @@ class OnboardingScreen extends ConsumerStatefulWidget {
   ConsumerState<OnboardingScreen> createState() => _OnboardingScreenState();
 }
 
-class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
+class _OnboardingScreenState extends ConsumerState<OnboardingScreen>
+    with SingleTickerProviderStateMixin {
   final PageController _pageController = PageController();
+  late AnimationController _floatController;
   int _index = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _floatController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 2),
+    )..repeat(reverse: true);
+  }
 
   static const List<_OnboardingItem> _items = <_OnboardingItem>[
     _OnboardingItem(
@@ -39,6 +50,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   @override
   void dispose() {
     _pageController.dispose();
+    _floatController.dispose();
     super.dispose();
   }
 
@@ -102,31 +114,40 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: <Widget>[
-                            Container(
-                              width: 74,
-                              height: 74,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                gradient: const LinearGradient(
-                                  colors: <Color>[
-                                    AppPalette.primary,
-                                    AppPalette.secondary,
+                            AnimatedBuilder(
+                              animation: _floatController,
+                              builder: (BuildContext context, Widget? child) {
+                                return Transform.translate(
+                                  offset: Offset(0, -6.0 * _floatController.value),
+                                  child: child,
+                                );
+                              },
+                              child: Container(
+                                width: 74,
+                                height: 74,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  gradient: const LinearGradient(
+                                    colors: <Color>[
+                                      AppPalette.primary,
+                                      AppPalette.secondary,
+                                    ],
+                                  ),
+                                  boxShadow: <BoxShadow>[
+                                    BoxShadow(
+                                      color: AppPalette.secondary.withValues(
+                                        alpha: 0.2,
+                                      ),
+                                      blurRadius: 22,
+                                      spreadRadius: 2,
+                                    ),
                                   ],
                                 ),
-                                boxShadow: <BoxShadow>[
-                                  BoxShadow(
-                                    color: AppPalette.secondary.withValues(
-                                      alpha: 0.2,
-                                    ),
-                                    blurRadius: 22,
-                                    spreadRadius: 2,
-                                  ),
-                                ],
-                              ),
-                              child: Icon(
-                                item.icon,
-                                color: AppPalette.background,
-                                size: 34,
+                                child: Icon(
+                                  item.icon,
+                                  color: AppPalette.background,
+                                  size: 34,
+                                ),
                               ),
                             ),
                             const SizedBox(height: 28),
